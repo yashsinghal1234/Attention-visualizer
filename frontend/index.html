@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Head Self-Attention Visualizer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="title-group">
+        <h1>Multi-Head Self-Attention Visualizer</h1>
+        <p>Interactive exploration of Transformer Scaled Dot-Product Attention</p>
+      </div>
+      <div class="header-badges">
+        <div id="status-badge" class="status-badge">
+          <span class="status-dot"></span>
+          <span id="status-text">Checking Backend...</span>
+        </div>
+        <a href="/docs" target="_blank" class="btn-secondary" title="View Swagger OpenAPI Documentation">
+          FastAPI Docs ↗
+        </a>
+      </div>
+    </header>
+
+    <!-- Main Controller Panel -->
+    <div class="panel">
+      <div class="controls-grid">
+        <!-- Presets -->
+        <div class="preset-row">
+          <span>Presets:</span>
+          <div id="preset-container" style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <!-- Loaded dynamically from /api/presets -->
+          </div>
+        </div>
+
+        <!-- Sentence Input -->
+        <div class="input-row">
+          <textarea id="input-text" placeholder="Type a sentence to visualize attention flow..." rows="2">the cat sat on the mat</textarea>
+        </div>
+
+        <!-- Hyperparameters -->
+        <div class="params-bar">
+          <div class="param-group">
+            <label for="select-heads">Heads (h):</label>
+            <select id="select-heads">
+              <option value="1">1 Head</option>
+              <option value="2">2 Heads</option>
+              <option value="4" selected>4 Heads</option>
+              <option value="8">8 Heads</option>
+            </select>
+          </div>
+
+          <div class="param-group">
+            <label for="select-dim">Model Dim (d):</label>
+            <select id="select-dim">
+              <option value="32">32-dim</option>
+              <option value="64" selected>64-dim</option>
+              <option value="128">128-dim</option>
+            </select>
+          </div>
+
+          <div class="param-group">
+            <label for="input-temp">Temp (τ): <span id="temp-val">1.0</span></label>
+            <input type="range" id="input-temp" min="0.2" max="3.0" step="0.1" value="1.0" />
+          </div>
+
+          <div class="param-group">
+            <label class="toggle-label" title="Mask future positions (Auto-regressive GPT style)">
+              <input type="checkbox" id="toggle-causal" />
+              <span>Causal Mask (GPT)</span>
+            </label>
+          </div>
+
+          <button id="btn-run" class="btn-primary">Compute Attention</button>
+        </div>
+      </div>
+
+      <!-- Head & View Navigation -->
+      <div class="head-navigation">
+        <div class="head-chips" id="head-chips-container">
+          <!-- Dynamically populated chips -->
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <div class="param-group" style="font-size: 12px;">
+            <label for="select-matrix-type">Layer:</label>
+            <select id="select-matrix-type" style="padding: 2px 6px; font-size: 12px;">
+              <option value="attention" selected>Softmax Attention (A)</option>
+              <option value="scaled">Scaled Scores (QKᵀ / √d)</option>
+              <option value="raw">Raw Dot Product (QKᵀ)</option>
+            </select>
+          </div>
+
+          <div class="view-tabs">
+            <button id="tab-heatmap" class="tab-btn active">2D Heatmap</button>
+            <button id="tab-arc" class="tab-btn">Arc Flow</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Visualization Stage -->
+      <div class="vis-container">
+        <!-- Heatmap View -->
+        <div id="heatmap-view"></div>
+
+        <!-- Arc Flow View -->
+        <div id="arc-view" style="display: none;">
+          <svg id="arc-svg"></svg>
+          <div class="token-nodes" id="arc-nodes"></div>
+        </div>
+      </div>
+
+      <!-- Diagnostics & Metadata Footer -->
+      <div class="vis-footer">
+        <div class="legend-row">
+          <span>0.00 (Low)</span>
+          <div class="colorbar" id="colorbar"></div>
+          <span>1.00 (High)</span>
+        </div>
+
+        <div id="top-edges-banner" class="top-edges-banner">
+          Loading attention edges...
+        </div>
+
+        <!-- Attended-To Salience Ranking -->
+        <div style="margin-top: 10px;">
+          <h4 style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">
+            Token Attention Received (Global Salience):
+          </h4>
+          <div id="salience-container" class="salience-container"></div>
+        </div>
+
+        <!-- Mathematical Context Box -->
+        <div class="math-box">
+          <strong>Mathematical Formulation:</strong>
+          <p>
+            <code>Attention(Q, K, V) = softmax((Q · Kᵀ) / √d_k + M) · V</code>
+          </p>
+          <p style="margin-top: 4px; font-size: 12px;">
+            Each head projects the input embeddings into dimension <code>d_k = d_model / h</code>. 
+            Queries match Keys via scaled dot-product. Softmax normalizes across keys to produce a probability distribution that weights the Values.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Tooltip -->
+  <div class="tooltip" id="tooltip"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

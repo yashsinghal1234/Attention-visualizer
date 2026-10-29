@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #07090e;
+  --bg-secondary: #0d111a;
+  --bg-card: rgba(15, 20, 32, 0.75);
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-focus: rgba(99, 102, 241, 0.5);
+  --accent-indigo: #6366f1;
+  --accent-cyan: #22d3ee;
+  --accent-amber: #f59e0b;
+  --accent-emerald: #10b981;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: #f1f5f9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Background subtle ambient glows */
+.bg-mesh {
+  background-color: #06080d;
+  background-image: 
+    radial-gradient(1200px 600px at 15% -10%, rgba(99, 102, 241, 0.12) 0%, transparent 70%),
+    radial-gradient(900px 500px at 85% 10%, rgba(34, 211, 238, 0.08) 0%, transparent 65%),
+    radial-gradient(1000px 700px at 50% 110%, rgba(168, 85, 247, 0.06) 0%, transparent 70%);
+}
+
+/* Glassmorphic card surface */
+.glass-card {
+  background: rgba(13, 17, 27, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.glass-card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.glass-card-hover:hover {
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 20px rgba(99, 102, 241, 0.1);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2638;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d3852;
+}
+
+/* Subtle pulse */
+@keyframes glowPulse {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.glow-active {
+  animation: glowPulse 2s ease-in-out infinite;
+}

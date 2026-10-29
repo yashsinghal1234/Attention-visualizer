@@ -1,0 +1,86 @@
+"""
+Pydantic schemas for the Attention Visualizer API.
+"""
+
+from typing import List
+from pydantic import BaseModel, Field
+
+
+class AttentionRequest(BaseModel):
+    text: str = Field(
+        default="the cat sat on the mat",
+        description="Input text sentence to tokenize and visualize."
+    )
+    num_heads: int = Field(
+        default=4,
+        ge=1,
+        le=12,
+        description="Number of attention heads (must divide d_model)."
+    )
+    d_model: int = Field(
+        default=64,
+        ge=16,
+        le=512,
+        description="Total embedding dimensionality."
+    )
+    causal: bool = Field(
+        default=False,
+        description="Whether to apply causal (autoregressive) masking."
+    )
+    temperature: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=5.0,
+        description="Softmax temperature scaling factor."
+    )
+    seed: int = Field(
+        default=42,
+        description="Random seed for deterministic initialization."
+    )
+
+
+class EdgeData(BaseModel):
+    source: int
+    target: int
+    source_token: str
+    target_token: str
+    weight: float
+
+
+class TokenImportance(BaseModel):
+    token: str
+    index: int
+    importance: float
+
+
+class HeadAttentionData(BaseModel):
+    head_index: int
+    head_name: str
+    attention_matrix: List[List[float]]
+    raw_scores: List[List[float]]
+    scaled_scores: List[List[float]]
+    entropy: List[float]
+    top_edges: List[EdgeData]
+
+
+class AttentionResponse(BaseModel):
+    tokens: List[str]
+    seq_len: int
+    num_heads: int
+    d_model: int
+    d_k: int
+    causal: bool
+    temperature: float
+    heads: List[HeadAttentionData]
+    average_attention: List[List[float]]
+    token_importance: List[TokenImportance]
+    top_global_edges: List[EdgeData]
+
+
+class PresetItem(BaseModel):
+    id: str
+    title: str
+    category: str
+    text: str
+    description: str
+
