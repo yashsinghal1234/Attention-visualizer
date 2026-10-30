@@ -2,7 +2,7 @@
 Pydantic schemas for the Attention Visualizer API.
 """
 
-from typing import List
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -11,17 +11,27 @@ class AttentionRequest(BaseModel):
         default="the cat sat on the mat",
         description="Input text sentence to tokenize and visualize."
     )
+    model_name: str = Field(
+        default="distilbert-base-uncased",
+        description="Pretrained model identifier ('distilbert-base-uncased', 'prajjwal1/bert-tiny', or 'custom')."
+    )
+    layer_index: int = Field(
+        default=0,
+        ge=0,
+        le=12,
+        description="Layer index to inspect in multi-layer pretrained models (0-based)."
+    )
     num_heads: int = Field(
         default=4,
         ge=1,
         le=12,
-        description="Number of attention heads (must divide d_model)."
+        description="Number of attention heads (for custom model)."
     )
     d_model: int = Field(
         default=64,
         ge=16,
-        le=512,
-        description="Total embedding dimensionality."
+        le=768,
+        description="Total embedding dimensionality (for custom model)."
     )
     causal: bool = Field(
         default=False,
@@ -64,6 +74,10 @@ class HeadAttentionData(BaseModel):
 
 
 class AttentionResponse(BaseModel):
+    model_name: str
+    is_pretrained: bool
+    layer_index: int
+    total_layers: int
     tokens: List[str]
     seq_len: int
     num_heads: int
@@ -84,3 +98,12 @@ class PresetItem(BaseModel):
     text: str
     description: str
 
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+    layers: int
+    heads: int
+    dim: int
+    type: str
+    description: str

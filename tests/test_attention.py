@@ -97,9 +97,10 @@ def test_api_presets():
 
 
 def test_api_attention_endpoint():
-    """Verify the compute attention endpoint with payload."""
+    """Verify the compute attention endpoint with custom payload."""
     payload = {
         "text": "The cat sat on the mat",
+        "model_name": "custom",
         "num_heads": 4,
         "d_model": 64,
         "causal": False,
@@ -112,4 +113,19 @@ def test_api_attention_endpoint():
     assert len(data["heads"]) == 4
     assert len(data["average_attention"]) == 6
     assert len(data["token_importance"]) == 6
+
+
+def test_api_pretrained_model():
+    """Verify online pretrained model extraction (bert-tiny)."""
+    payload = {
+        "text": "The cat sat on the mat",
+        "model_name": "prajjwal1/bert-tiny",
+        "layer_index": 0,
+    }
+    response = client.post("/api/attention", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_pretrained"] is True
+    assert "[CLS]" in data["tokens"]
+    assert len(data["heads"]) == 2
 

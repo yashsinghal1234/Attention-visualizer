@@ -1,11 +1,11 @@
 """
 Multi-Head Self-Attention Engine.
 
-Implements the Scaled Dot-Product Attention mechanism as introduced in
-"Attention Is All You Need" (Vaswani et al., 2017) using PyTorch.
-
-Mathematical formulation:
-    Attention(Q, K, V) = softmax( (Q * K^T) / sqrt(d_k) + M ) * V
+Supports both:
+1. Online / Pretrained Transformer Models (BERT, DistilBERT, GPT-2 via HuggingFace)
+   extracting true multi-layer, multi-head attention weights.
+2. The fundamental Scaled Dot-Product Attention mechanism (Vaswani et al., 2017)
+   implemented in pure PyTorch with customizable heads, dimensions, temperature, and causal masks.
 """
 
 import math
@@ -14,6 +14,150 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Global in-memory cache for loaded HuggingFace models & tokenizers
+LOADED_MODELS: Dict[str, Any] = {}
+
+AVAILABLE_ONLINE_MODELS = {
+    "distilbert-base-uncased": {
+        "id": "distilbert-base-uncased",
+        "name": "DistilBERT Base (Uncased)",
+        "layers": 6,
+        "heads": 12,
+        "dim": 768,
+        "type": "encoder",
+        "description": "6-layer transformer encoder pre-trained on Wikipedia + BookCorpus",
+    },
+    "prajjwal1/bert-tiny": {
+        "id": "prajjwal1/bert-tiny",
+        "name": "BERT Tiny (2 Layers, 2 Heads)",
+        "layers": 2,
+        "heads": 2,
+        "dim": 128,
+        "type": "encoder",
+        "description": "Ultra-lightweight 2-layer compact BERT checkpoint",
+    },
+}
+
+
+def get_pretrained_model(model_name: str):
+    """Load and cache a pretrained HuggingFace model with output_attentions=True."""
+    if model_name not in LOADED_MODELS:
+        from transformers import AutoTokenizer, AutoModel
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name, output_attentions=True)
+        model.eval()
+        LOADED_MODELS[model_name] = (tokenizer, model)
+    return LOADED_MODELS[model_name]
+
+
+def analyze_pretrained_attention(
+    text: str,
+    model_name: str = "distilbert-base-uncased",
+    layer_index: int = 0,
+) -> Dict[str, Any]:
+    """
+    Pass text through an actual pretrained Transformer model and extract
+    true attention weights from all heads at the specified layer.
+    """
+    tokenizer, model = get_pretrained_model(model_name)
+    
+    # Tokenize input
+    inputs = tokenizer(text, return_tensors="pt")
+    input_ids = inputs["input_ids"][0]
+    tokens = tokenizer.convert_ids_to_tokens(input_ids)
+    seq_len = len(tokens)
+
+    # Run inference with attention capture
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # outputs.attentions is a tuple of length num_layers
+    # Each tensor has shape: (batch_size=1, num_heads, seq_len, seq_len)
+    num_layers = len(outputs.attentions)
+    target_layer = max(0, min(layer_index, num_layers - 1))
+    layer_attn = outputs.attentions[target_layer][0]  # Shape: (num_heads, seq_len, seq_len)
+    num_heads = layer_attn.shape[0]
+
+    # Format per-head data
+    heads_data = []
+    avg_matrix = layer_attn.mean(dim=0).tolist()
+
+    for h in range(num_heads):
+        head_attn = layer_attn[h].tolist()
+        
+        # Entropy per token row: - sum(p * log(p))
+        entropy_list = []
+        for i in range(seq_len):
+            row = layer_attn[h, i]
+            ent = -torch.sum(row * torch.log2(row + 1e-9)).item()
+            entropy_list.append(round(ent, 3))
+
+        # Top attention connections
+        edges = []
+        for i in range(seq_len):
+            for j in range(seq_len):
+                edges.append({
+                    "source": i,
+                    "target": j,
+                    "source_token": tokens[i],
+                    "target_token": tokens[j],
+                    "weight": round(head_attn[i][j], 4),
+                })
+        edges.sort(key=lambda e: e["weight"], reverse=True)
+
+        heads_data.append({
+            "head_index": h,
+            "head_name": f"Head {h + 1}",
+            "attention_matrix": [[round(val, 4) for val in row] for row in head_attn],
+            "raw_scores": [[round(val, 4) for val in row] for row in head_attn],
+            "scaled_scores": [[round(val, 4) for val in row] for row in head_attn],
+            "entropy": entropy_list,
+            "top_edges": edges[:5],
+        })
+
+    # Global token importance (column sum of average attention)
+    avg_tensor = layer_attn.mean(dim=0)
+    col_sums = avg_tensor.sum(dim=0).tolist()
+    token_importance = [
+        {"token": tok, "index": idx, "importance": round(col_sums[idx] / seq_len, 4)}
+        for idx, tok in enumerate(tokens)
+    ]
+
+    # Global strongest edges across average
+    global_edges = []
+    for i in range(seq_len):
+        for j in range(seq_len):
+            global_edges.append({
+                "source": i,
+                "target": j,
+                "source_token": tokens[i],
+                "target_token": tokens[j],
+                "weight": round(avg_matrix[i][j], 4),
+            })
+    global_edges.sort(key=lambda e: e["weight"], reverse=True)
+
+    return {
+        "model_name": model_name,
+        "is_pretrained": True,
+        "layer_index": target_layer,
+        "total_layers": num_layers,
+        "tokens": tokens,
+        "seq_len": seq_len,
+        "num_heads": num_heads,
+        "d_model": getattr(model.config, "hidden_size", 768),
+        "d_k": getattr(model.config, "hidden_size", 768) // num_heads,
+        "causal": False,
+        "temperature": 1.0,
+        "heads": heads_data,
+        "average_attention": [[round(val, 4) for val in row] for row in avg_matrix],
+        "token_importance": sorted(token_importance, key=lambda x: x["importance"], reverse=True),
+        "top_global_edges": global_edges[:8],
+    }
+
+
+# =========================================================================
+# Custom PyTorch Scaled Dot-Product Multi-Head Self-Attention Layer
+# =========================================================================
 
 def get_sinusoidal_positional_encoding(seq_len: int, d_model: int) -> torch.Tensor:
     """Generate standard sinusoidal positional encodings."""
@@ -30,10 +174,9 @@ def get_sinusoidal_positional_encoding(seq_len: int, d_model: int) -> torch.Tens
 
 def token_to_feature_vector(token: str, d_model: int, seed: int = 42) -> torch.Tensor:
     """
-    Produce a deterministic, rich pseudo-semantic embedding vector for a given token.
-    Combines character n-gram hashing and linguistic heuristics (word length, vowels, syntax).
+    Produce a deterministic pseudo-semantic embedding vector for a given token.
+    Combines character n-gram hashing and linguistic heuristics.
     """
-    # Deterministic seed based on token
     token_clean = token.strip().lower()
     h = seed
     for char in token_clean:
@@ -43,21 +186,16 @@ def token_to_feature_vector(token: str, d_model: int, seed: int = 42) -> torch.T
     rng.manual_seed(h)
     vec = torch.randn(d_model, generator=rng)
     
-    # Linguistic semantic biasing
-    # 1. Pronouns and references
+    # Linguistic semantic clustering
     if token_clean in {"it", "they", "them", "he", "she", "this", "that", "these", "those"}:
         vec[0:4] += 1.8
-    # 2. Common nouns
     elif token_clean in {"cat", "dog", "animal", "street", "mat", "arrow", "banana", "robot", "transformer", "model"}:
         vec[4:8] += 1.8
-    # 3. Action verbs
     elif token_clean in {"sat", "ran", "jumped", "cross", "flies", "likes", "attention", "learns", "predicts"}:
         vec[8:12] += 1.8
-    # 4. Determiners & prepositions
     elif token_clean in {"the", "a", "an", "on", "in", "at", "by", "for", "with", "because"}:
         vec[12:16] += 1.5
 
-    # Normalize vector
     return F.normalize(vec, p=2, dim=0)
 
 
@@ -73,13 +211,11 @@ class MultiHeadSelfAttention(nn.Module):
         self.d_k = d_model // num_heads
 
         torch.manual_seed(seed)
-        # Learnable / initialized linear projections
         self.w_q = nn.Linear(d_model, d_model, bias=False)
         self.w_k = nn.Linear(d_model, d_model, bias=False)
         self.w_v = nn.Linear(d_model, d_model, bias=False)
         self.w_o = nn.Linear(d_model, d_model, bias=False)
 
-        # Initialize with orthogonal weights for distinct head representations
         nn.init.orthogonal_(self.w_q.weight)
         nn.init.orthogonal_(self.w_k.weight)
         nn.init.orthogonal_(self.w_v.weight)
@@ -91,39 +227,27 @@ class MultiHeadSelfAttention(nn.Module):
         causal: bool = False,
         temperature: float = 1.0,
     ) -> Dict[str, Any]:
-        """
-        Compute multi-head attention over input tensor x.
-        x: shape (seq_len, d_model)
-        """
         seq_len, d_model = x.shape
         scale = 1.0 / (math.sqrt(self.d_k) * max(temperature, 1e-4))
 
-        # 1. Project Q, K, V -> (seq_len, d_model)
         Q = self.w_q(x)
         K = self.w_k(x)
         V = self.w_v(x)
 
-        # 2. Reshape into (num_heads, seq_len, d_k)
         Q_heads = Q.view(seq_len, self.num_heads, self.d_k).transpose(0, 1)  # (H, N, d_k)
         K_heads = K.view(seq_len, self.num_heads, self.d_k).transpose(0, 1)  # (H, N, d_k)
         V_heads = V.view(seq_len, self.num_heads, self.d_k).transpose(0, 1)  # (H, N, d_k)
 
-        # 3. Scaled dot product: S = (Q * K^T) * scale -> (H, N, N)
         raw_scores = torch.bmm(Q_heads, K_heads.transpose(1, 2))  # (H, N, N)
         scaled_scores = raw_scores * scale
 
-        # 4. Optional causal mask (mask future tokens with -inf)
         if causal:
             causal_mask = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1)
             scaled_scores = scaled_scores + causal_mask.unsqueeze(0)
 
-        # 5. Attention Weights via Softmax over key dimension
         attention_weights = F.softmax(scaled_scores, dim=-1)  # (H, N, N)
-
-        # 6. Weighted sum over Values: O_heads = A * V -> (H, N, d_k)
         O_heads = torch.bmm(attention_weights, V_heads)
 
-        # 7. Concatenate heads and project -> (seq_len, d_model)
         O_concat = O_heads.transpose(0, 1).contiguous().view(seq_len, d_model)
         output = self.w_o(O_concat)
 
@@ -145,65 +269,62 @@ def analyze_text_attention(
     causal: bool = False,
     temperature: float = 1.0,
     seed: int = 42,
+    model_name: str = "custom",
+    layer_index: int = 0,
 ) -> Dict[str, Any]:
     """
-    Tokenizes input text, applies multi-head self-attention, and extracts
-    structured statistics, heatmaps, entropy, and top token dependencies.
+    Main entry point: routes to either an actual online pretrained model
+    or the custom PyTorch Scaled Dot-Product Attention layer.
     """
-    # 1. Clean tokenization
+    if model_name in AVAILABLE_ONLINE_MODELS:
+        return analyze_pretrained_attention(text, model_name=model_name, layer_index=layer_index)
+
+    # Otherwise compute via custom PyTorch MHA layer
     raw_tokens = text.strip().split()
     if not raw_tokens:
         raw_tokens = ["empty"]
     
-    # Cap token count to maintain great interactivity (max 32 tokens)
     tokens = raw_tokens[:32]
     seq_len = len(tokens)
 
-    # 2. Build input embeddings + positional encodings
     emb_list = [token_to_feature_vector(tok, d_model, seed=seed) for tok in tokens]
-    X_emb = torch.stack(emb_list, dim=0)  # (seq_len, d_model)
+    X_emb = torch.stack(emb_list, dim=0)
     pe = get_sinusoidal_positional_encoding(seq_len, d_model)
     X = X_emb + pe
 
-    # 3. Instantiate model & compute
     model = MultiHeadSelfAttention(d_model=d_model, num_heads=num_heads, seed=seed)
     with torch.no_grad():
         result = model(X, causal=causal, temperature=temperature)
 
-    attn_weights = result["attention_weights"]  # (H, N, N)
-    raw_scores = result["raw_scores"]          # (H, N, N)
-    scaled_scores = result["scaled_scores"]    # (H, N, N)
+    attn_weights = result["attention_weights"]
+    raw_scores = result["raw_scores"]
+    scaled_scores = result["scaled_scores"]
 
-    # 4. Format per-head data
     heads_data = []
-    avg_matrix = attn_weights.mean(dim=0).tolist()  # (N, N)
+    avg_matrix = attn_weights.mean(dim=0).tolist()
 
     for h in range(num_heads):
         head_attn = attn_weights[h].tolist()
         head_raw = raw_scores[h].tolist()
         head_scaled = scaled_scores[h].tolist()
 
-        # Compute entropy per token query: - sum(p * log(p + eps))
         entropy_list = []
         for i in range(seq_len):
             row = attn_weights[h, i]
-            ent = -torch.sum(row * torch.log(row + 1e-9)).item()
-            entropy_list.append(round(ent, 4))
+            ent = -torch.sum(row * torch.log2(row + 1e-9)).item()
+            entropy_list.append(round(ent, 3))
 
-        # Top attention connections for this head
         edges = []
         for i in range(seq_len):
             for j in range(seq_len):
-                weight = head_attn[i][j]
                 edges.append({
                     "source": i,
                     "target": j,
                     "source_token": tokens[i],
                     "target_token": tokens[j],
-                    "weight": round(weight, 4),
+                    "weight": round(head_attn[i][j], 4),
                 })
         edges.sort(key=lambda e: e["weight"], reverse=True)
-        top_edges = edges[:5]
 
         heads_data.append({
             "head_index": h,
@@ -212,10 +333,9 @@ def analyze_text_attention(
             "raw_scores": [[round(val, 4) for val in row] for row in head_raw],
             "scaled_scores": [[round(val, 4) for val in row] for row in head_scaled],
             "entropy": entropy_list,
-            "top_edges": top_edges,
+            "top_edges": edges[:5],
         })
 
-    # Global token importance (column sum of average attention: who receives the most attention?)
     avg_tensor = attn_weights.mean(dim=0)
     col_sums = avg_tensor.sum(dim=0).tolist()
     token_importance = [
@@ -223,7 +343,6 @@ def analyze_text_attention(
         for idx, tok in enumerate(tokens)
     ]
 
-    # Global strongest attention edges across average
     global_edges = []
     for i in range(seq_len):
         for j in range(seq_len):
@@ -237,6 +356,10 @@ def analyze_text_attention(
     global_edges.sort(key=lambda e: e["weight"], reverse=True)
 
     return {
+        "model_name": "custom",
+        "is_pretrained": False,
+        "layer_index": 0,
+        "total_layers": 1,
         "tokens": tokens,
         "seq_len": seq_len,
         "num_heads": num_heads,
@@ -246,7 +369,6 @@ def analyze_text_attention(
         "temperature": temperature,
         "heads": heads_data,
         "average_attention": [[round(val, 4) for val in row] for row in avg_matrix],
-        "token_importance": token_importance,
+        "token_importance": sorted(token_importance, key=lambda x: x["importance"], reverse=True),
         "top_global_edges": global_edges[:8],
     }
-

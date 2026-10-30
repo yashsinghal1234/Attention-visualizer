@@ -1,7 +1,8 @@
 """
 FastAPI Server for Attention Visualizer.
 
-Serves the REST API and hosts the frontend interface.
+Serves the REST API supporting both real online HuggingFace pretrained models
+and custom PyTorch Multi-Head Scaled Dot-Product Attention.
 """
 
 import os
@@ -12,13 +13,21 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 import torch
 
-from backend.schemas import AttentionRequest, AttentionResponse, PresetItem
-from backend.attention import analyze_text_attention
+from backend.schemas import (
+    AttentionRequest,
+    AttentionResponse,
+    PresetItem,
+    ModelInfo,
+)
+from backend.attention import (
+    analyze_text_attention,
+    AVAILABLE_ONLINE_MODELS,
+)
 
 app = FastAPI(
     title="Attention Visualizer API",
     description="Interactive Multi-Head Self-Attention Exploration Service",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 # Enable CORS for flexible development
@@ -35,36 +44,37 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 PRESETS = [
     PresetItem(
         id="classic",
-        title="Classic Nursery Rhyme",
+        title="Classic Rhyme",
         category="Syntactic Association",
         text="the cat sat on the mat",
-        description="Simple sentence showing subject-verb-location dependencies."
+        description="Subject-verb-location dependencies."
     ),
     PresetItem(
         id="winograd",
         title="Winograd Schema (Coreference)",
         category="Semantic Ambiguity",
         text="The animal didn't cross the street because it was too tired",
-        description="Coreference resolution: what does 'it' attend to? 'animal' or 'street'?"
+        description="Coreference resolution: pronoun 'it' targets 'animal'."
     ),
     PresetItem(
         id="polysemy",
         title="Lexical Polysemy & Puns",
         category="Disambiguation",
         text="Time flies like an arrow fruit flies like a banana",
-        description="Contrasting 'flies' as a verb vs 'flies' as a noun."
+        description="Word sense disambiguation: 'flies' as verb vs. noun."
     ),
     PresetItem(
         id="transformer",
         title="Attention Is All You Need",
         category="Deep Learning",
-        text="Transformers replace recurrence and convolutions with multi-head self-attention",
-        description="Domain-specific sentence showcasing multi-head syntactic routing."
+        text="Transformers replace recurrence and convolutions with multi-head attention",
+        description="Long-range semantic coupling across technical domain text."
     ),
 ]
 
 
 @app.get("/api/health")
+@app.get("/health")
 def health_check():
     """Health status and environment diagnostic."""
     return {
@@ -73,7 +83,24 @@ def health_check():
         "torch_version": torch.__version__,
         "cuda_available": torch.cuda.is_available(),
         "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "online_models_ready": list(AVAILABLE_ONLINE_MODELS.keys()),
     }
+
+
+@app.get("/api/models", response_model=list[ModelInfo])
+def get_available_models():
+    """Return list of available pretrained online models and architectures."""
+    custom_model = ModelInfo(
+        id="custom",
+        name="Custom Scaled Dot-Product Engine",
+        layers=1,
+        heads=4,
+        dim=64,
+        type="custom",
+        description="Configurable PyTorch Multi-Head Attention layer with custom heads, dims, and masks."
+    )
+    online_list = [ModelInfo(**info) for info in AVAILABLE_ONLINE_MODELS.values()]
+    return [custom_model] + online_list
 
 
 @app.get("/api/presets", response_model=list[PresetItem])
@@ -86,13 +113,14 @@ def get_presets():
 def compute_attention(req: AttentionRequest):
     """
     Compute multi-head self-attention matrices, entropy metrics,
-    and dependency graphs for the requested text and configuration.
+    and dependency graphs using either online pretrained checkpoints or custom MHA.
     """
-    if req.d_model % req.num_heads != 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"d_model ({req.d_model}) must be divisible by num_heads ({req.num_heads})."
-        )
+    if req.model_name == "custom":
+        if req.d_model % req.num_heads != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"d_model ({req.d_model}) must be divisible by num_heads ({req.num_heads})."
+            )
 
     try:
         data = analyze_text_attention(
@@ -102,6 +130,8 @@ def compute_attention(req: AttentionRequest):
             causal=req.causal,
             temperature=req.temperature,
             seed=req.seed,
+            model_name=req.model_name,
+            layer_index=req.layer_index,
         )
         return data
     except Exception as e:
@@ -114,19 +144,6 @@ def redirect_to_nextjs():
     return RedirectResponse(url="http://localhost:3001", status_code=302)
 
 
-# Mount frontend static directory for standalone / legacy preview
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
-    @app.get("/legacy")
-    def serve_legacy_frontend():
-        index_file = FRONTEND_DIR / "index.html"
-        if index_file.exists():
-            return FileResponse(str(index_file))
-        return {"message": "Frontend not found, check frontend/ directory."}
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.app:app", host="127.0.0.1", port=8000, reload=True)
-
